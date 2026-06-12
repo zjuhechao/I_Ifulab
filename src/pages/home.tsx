@@ -2,16 +2,13 @@ import { useEffect, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
 import {
   ScanFace, Sparkles, Scale, Wand2, CalendarCheck, TrendingUp,
-  ChevronRight, Bell, Plus, Lightbulb, Clock, BookOpen, CheckCircle2, AlertTriangle
+  ChevronRight, Bell, Plus, Lightbulb, Clock, BookOpen
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/app-store";
 import { supabase } from "@/supabase/client";
-import { getTextGenAIConfig } from "@/services/aiConfig";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { MedicalDisclaimer } from "@/components/medical-disclaimer";
 
 const FEATURE_CARDS = [
@@ -27,17 +24,6 @@ interface Tip {
   id: string;
   content: string;
   category: string | null;
-}
-
-interface Article {
-  id: string;
-  title: string;
-  summary: string | null;
-  cover_image: string | null;
-  category: string | null;
-  author: string | null;
-  read_count: number | null;
-  isFallback?: boolean;
 }
 
 function useTips() {
@@ -119,109 +105,6 @@ function useTips() {
   return { tips, loading };
 }
 
-// 获取今天的日期字符串（YYYY-MM-DD格式）
-function getTodayString(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
-
-// AI生成每日护肤文章
-async function generateDailyArticle(): Promise<Article & { isFallback?: boolean }> {
-  try {
-    // 获取用户配置的AI
-    const userConfig = await getTextGenAIConfig();
-
-    const { data, error } = await supabase.functions.invoke('ai-personalize', {
-      body: {
-        type: 'daily_article',
-        prompt: '请生成一篇每日护肤知识文章，包含标题和正文（400-500字），主题可以是：护肤技巧、成分科普、季节护理、误区解答等。返回JSON格式：{title: "文章标题", content: "文章内容"}',
-        userConfig
-      }
-    });
-
-    if (error) throw error;
-
-    return {
-      id: 'ai-daily-' + Date.now(),
-      title: data?.title || '每日护肤小贴士',
-      summary: data?.content || '保持规律作息，做好基础护肤。',
-      cover_image: null,
-      category: 'AI生成',
-      author: '容·易 AI',
-      read_count: Math.floor(Math.random() * 500) + 500,
-      isFallback: false,
-    };
-  } catch {
-    // 降级方案
-    return {
-      id: 'ai-daily-fallback',
-      title: '每日护肤小贴士',
-      summary: '护肤是一门科学，需要根据个人肤质、季节变化来调整。建议每天做好清洁、保湿、防晒三步基础护理。清洁能去除污垢和多余油脂，保湿帮助维持肌肤屏障，防晒则是预防光老化的关键。建议根据季节和肤质变化调整护肤品，定期观察肌肤状态，建立适合自己的护肤流程。',
-      cover_image: null,
-      category: 'AI生成',
-      author: '容·易 AI',
-      read_count: 500,
-      isFallback: true,
-    };
-  }
-}
-
-// 本地存储的文章缓存键
-const ARTICLE_CACHE_KEY = 'ifulab_daily_article';
-
-interface ArticleCache {
-  date: string;
-  article: Article;
-}
-
-function useArticles() {
-  const [articles, setArticles] = useState<Article[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function loadDailyArticle() {
-      const today = getTodayString();
-      setLoading(true);
-
-      // 尝试从本地存储读取缓存
-      try {
-        const cached = localStorage.getItem(ARTICLE_CACHE_KEY);
-        if (cached) {
-          const cacheData: ArticleCache = JSON.parse(cached);
-          // 如果缓存是今天的，直接使用
-          if (cacheData.date === today) {
-            setArticles([cacheData.article]);
-            setLoading(false);
-            return;
-          }
-        }
-      } catch {
-        // 本地存储读取失败，继续生成新文章
-      }
-
-      // 生成新文章并缓存
-      const article = await generateDailyArticle();
-      setArticles([article]);
-
-      // 保存到本地存储（只有非降级内容才缓存）
-      if (!article.isFallback) {
-        try {
-          const cacheData: ArticleCache = { date: today, article };
-          localStorage.setItem(ARTICLE_CACHE_KEY, JSON.stringify(cacheData));
-        } catch {
-          // 本地存储写入失败，忽略
-        }
-      }
-
-      setLoading(false);
-    }
-
-    loadDailyArticle();
-  }, []);
-
-  return { articles, loading };
-}
-
 function ScoreRing({ score }: { score: number }) {
   const circumference = 2 * Math.PI * 45;
   const strokeDashoffset = circumference - (score / 100) * circumference;
@@ -265,8 +148,6 @@ export function HomePage() {
   const { isLoggedIn, user, latestReport, todayCheckIn, checkInRecords } = useAppStore();
   const [currentTip, setCurrentTip] = useState(0);
   const { tips } = useTips();
-  const { articles, loading: articleLoading } = useArticles();
-  const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
 
   useEffect(() => { if (!isLoggedIn) router.navigate({ to: '/login' }); }, [isLoggedIn, router]);
 
@@ -481,92 +362,50 @@ export function HomePage() {
         </div>
       )}
 
-      {/* 每日护肤好文 */}
-      <div className="px-4 py-4">
-        <div className="mx-auto max-w-md">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-primary" />
-              每日护肤好文
+      {/* 精选护肤知识 */}
+      {tips.length > 0 && (
+        <div className="px-4 py-4">
+          <div className="mx-auto max-w-md">
+            <h2 className="text-lg font-semibold text-foreground flex items-center gap-2 mb-3">
+              <BookOpen className="w-5 h-5 text-violet-500" />
+              精选护肤知识
             </h2>
-            <span className="text-[10px] px-2 py-1 rounded-full bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700 flex items-center gap-1">
-              <Sparkles className="w-3 h-3" />
-              AI生成
-            </span>
-          </div>
-
-          {articleLoading ? (
-            <Card className="p-4 border-l-4 border-l-violet-400">
-              <div className="flex items-center justify-center py-6">
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-6 h-6 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />
-                  <p className="text-xs text-muted-foreground">AI正在生成今日文章...</p>
-                </div>
-              </div>
-            </Card>
-          ) : articles.length > 0 ? (
-            <Card
-              className="p-4 cursor-pointer hover:shadow-soft-lg transition-shadow border-l-4 border-l-violet-400"
-              onClick={() => setSelectedArticle(articles[0])}
-            >
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <h3 className="font-medium text-sm line-clamp-2 mb-2">{articles[0].title}</h3>
-                  <p className="text-xs text-muted-foreground line-clamp-3 leading-relaxed">{articles[0].summary}</p>
-                  <div className="flex items-center justify-between mt-3">
-                    <span className="text-[10px] text-muted-foreground">作者：{articles[0].author}</span>
-                    <span className="text-[10px] text-muted-foreground">{articles[0].read_count}阅读</span>
+            <div className="space-y-2">
+              {tips.slice(0, 3).map((tip) => (
+                <Card key={tip.id} className="p-3 border-l-4 border-l-violet-400">
+                  <div className="flex items-start gap-2">
+                    <Lightbulb className="w-4 h-4 text-violet-500 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <p className="text-sm text-foreground">{tip.content}</p>
+                      {tip.category && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 mt-1 inline-block">
+                          {tip.category === 'cleaning' && '清洁'}
+                          {tip.category === 'moisturizing' && '保湿'}
+                          {tip.category === 'sunscreen' && '防晒'}
+                          {tip.category === 'antiaging' && '抗老'}
+                          {tip.category === 'whitening' && '美白'}
+                          {tip.category === 'sensitive' && '敏感肌'}
+                          {tip.category === 'acne' && '痘痘'}
+                          {tip.category === 'diet' && '饮食'}
+                          {tip.category === 'sleep' && '睡眠'}
+                          {tip.category === 'exercise' && '运动'}
+                          {tip.category === 'general' && '通用'}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  {articles[0].isFallback && (
-                    <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
-                      <Sparkles className="w-3 h-3" />
-                      AI生成超时，显示默认内容
-                    </p>
-                  )}
-                </div>
-              </div>
-            </Card>
-          ) : null}
+                </Card>
+              ))}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 悬浮按钮 */}
-      <button onClick={() => router.navigate({ to: '/skin-test' })} 
+      <button onClick={() => router.navigate({ to: '/skin-test' })}
         className="fixed bottom-20 right-4 w-14 h-14 rounded-full bg-gradient-to-br from-sky-400 to-cyan-400 text-white shadow-lg flex items-center justify-center hover:scale-110 transition-transform z-50">
         <Plus className="w-6 h-6" />
       </button>
-
-      {/* 文章详情弹窗 */}
-      <Sheet open={!!selectedArticle} onOpenChange={() => setSelectedArticle(null)}>
-        <SheetContent className="sm:max-w-md">
-          {selectedArticle && (
-            <>
-              <SheetHeader>
-                <SheetTitle className="text-left text-base">{selectedArticle.title}</SheetTitle>
-              </SheetHeader>
-              <ScrollArea className="h-[calc(100vh-100px)] mt-4">
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 flex items-center gap-1">
-                      <Sparkles className="w-3 h-3" />
-                      {selectedArticle.category}
-                    </span>
-                    <span>作者：{selectedArticle.author}</span>
-                    <span>{selectedArticle.read_count}阅读</span>
-                  </div>
-                  <p className="text-sm text-foreground leading-relaxed">{selectedArticle.summary}</p>
-                  <div className="mt-6 p-3 bg-muted/50 rounded-lg">
-                    <p className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Sparkles className="w-3 h-3 text-violet-500" />
-                      本文内容由 AI 生成，仅供参考，不构成专业医疗建议
-                    </p>
-                  </div>
-                </div>
-              </ScrollArea>
-            </>
-          )}
-        </SheetContent>
-      </Sheet>
 
       {/* 医疗免责声明 */}
       <div className="px-4 py-4">

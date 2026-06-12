@@ -311,13 +311,11 @@ export function SkinTestPage() {
     await performAnalysis();
   };
 
-  // 是否使用官方AI的状态
-  const [useOfficialAI, setUseOfficialAI] = useState(false);
+  // AI配置错误对话框
   const [showAIConfigDialog, setShowAIConfigDialog] = useState(false);
   const [aiConfigError, setAiConfigError] = useState<{
     message: string;
-    provider: string;
-    model: string;
+    code: string;
   } | null>(null);
 
   // 边界场景检测状态
@@ -335,7 +333,7 @@ export function SkinTestPage() {
         age,
         gender || "female",
         answers,
-        { useOfficialAI, userId: user?.id }
+        { userId: user?.id }
       );
       const adjusted = adjustScore(result, answers);
       const ageGroup = ageGroups.find(g => age >= g.min && age <= g.max)?.group || "adult";
@@ -350,18 +348,15 @@ export function SkinTestPage() {
       updateSkinProfile({ skinType: adjusted.skin_type as SkinType, age, gender: gender || "female" });
       setAnalysisResult(adjusted);
       setStep("result");
-      // 重置使用官方AI的状态
-      setUseOfficialAI(false);
     } catch (err: any) {
-      // 处理自定义AI配置失败的情况
-      if (err.code === 'CUSTOM_AI_FAILED' && err.originalError) {
+      // 处理AI配置失败的情况
+      if (err.code === 'CUSTOM_AI_FAILED' || err.code === 'NO_AI_CONFIG') {
         setAiConfigError({
-          message: err.originalError.message || err.message,
-          provider: err.originalError.configError?.provider || 'unknown',
-          model: err.originalError.configError?.model || 'unknown',
+          message: err.originalError?.message || err.message || '请先配置AI服务',
+          code: err.code,
         });
         setShowAIConfigDialog(true);
-        setStep("modeSelect"); // 回到模式选择页面，让用户决定是否使用官方AI
+        setStep("modeSelect");
       } else {
         setError(err.message || "分析失败");
         setStep("upload");
@@ -371,16 +366,7 @@ export function SkinTestPage() {
     }
   };
 
-  // 使用官方AI继续分析
-  const handleUseOfficialAI = () => {
-    setShowAIConfigDialog(false);
-    setUseOfficialAI(true);
-    setStep("analyzing");
-    // 延迟执行分析，让状态更新
-    setTimeout(() => performAnalysis(), 100);
-  };
-
-  // 取消分析，去配置页面
+  // 前往AI配置页面
   const handleGoToAIConfig = () => {
     setShowAIConfigDialog(false);
     navigate({ to: "/ai-config" });
@@ -1223,31 +1209,26 @@ export function SkinTestPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-rose-600">
               <AlertTriangle className="w-5 h-5" />
-              AI配置异常
+              {aiConfigError?.code === 'NO_AI_CONFIG' ? 'AI服务未配置' : 'AI配置异常'}
             </DialogTitle>
             <DialogDescription className="text-sm text-slate-600 pt-2">
-              {aiConfigError?.message || '您配置的AI服务存在问题'}
+              {aiConfigError?.code === 'NO_AI_CONFIG'
+                ? '请先配置AI视觉理解服务后再进行测肤分析。'
+                : aiConfigError?.message || '您配置的AI服务存在问题，请检查后重试。'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
-            {aiConfigError && (
-              <div className="p-3 bg-slate-50 rounded-lg text-xs">
-                <p className="text-slate-500">配置提供商: <span className="font-medium text-slate-700">{aiConfigError.provider}</span></p>
-                <p className="text-slate-500">模型: <span className="font-medium text-slate-700">{aiConfigError.model}</span></p>
-              </div>
-            )}
             <p className="text-sm text-slate-600">
-              是否使用官方AI服务继续分析？官方AI服务由平台提供，无需额外配置。
+              请在AI配置页面添加视觉理解服务的API密钥，支持OpenAI、自定义API等多种服务商。
             </p>
           </div>
           <div className="flex gap-3">
-            <Button variant="outline" className="flex-1" onClick={handleGoToAIConfig}>
-              <Settings className="w-4 h-4 mr-1" />
-              去配置
+            <Button variant="outline" className="flex-1" onClick={() => setShowAIConfigDialog(false)}>
+              取消
             </Button>
-            <Button className="flex-1" onClick={handleUseOfficialAI}>
-              <Sparkles className="w-4 h-4 mr-1" />
-              使用官方AI
+            <Button className="flex-1" onClick={handleGoToAIConfig}>
+              <Settings className="w-4 h-4 mr-1" />
+              前往配置
             </Button>
           </div>
         </DialogContent>

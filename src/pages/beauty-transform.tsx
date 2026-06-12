@@ -1,13 +1,15 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Camera, ImageIcon, Sparkles, Download, Share2, Loader2, Wand2, RefreshCw, Eye, EyeOff, ChevronLeft, ChevronRight } from "lucide-react";
+import { Camera, ImageIcon, Sparkles, Download, Share2, Loader2, Wand2, RefreshCw, Eye, EyeOff, ChevronLeft, ChevronRight, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase, getSupabaseUrl } from "@/supabase/client";
 // base64-arraybuffer 已移除，使用原生实现
 import { toast } from "sonner";
 import { useAppStore } from "@/store/app-store";
+import { getImageGenAIConfig } from "@/services/aiConfig";
 
 const AGE_GROUPS = [
   { id: "teen", label: "18-22岁", desc: "青春校园", icon: "🎓", tips: ["轻薄底妆", "自然眉形", "淡粉唇彩"] },
@@ -177,6 +179,7 @@ async function transformBeauty(
 }
 
 export function BeautyTransformPage() {
+  const navigate = useNavigate();
   const { user } = useAppStore();
   const [photo, setPhoto] = useState<string | null>(null);
   const [selectedAgeGroup, setSelectedAgeGroup] = useState<string>(user?.ageGroup === "teen" ? "teen" : user?.ageGroup === "adult" ? "adult" : "adult");
@@ -190,8 +193,14 @@ export function BeautyTransformPage() {
   const [compareMode, setCompareMode] = useState<"split" | "toggle">("split");
   const [showOriginal, setShowOriginal] = useState(false);
   const [splitPosition, setSplitPosition] = useState(50);
+  const [hasAIConfig, setHasAIConfig] = useState<boolean | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // 检查用户是否配置了图像生成AI
+  useEffect(() => {
+    getImageGenAIConfig().then(config => setHasAIConfig(!!config));
+  }, []);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -210,7 +219,7 @@ export function BeautyTransformPage() {
 
   const handleGenerate = async () => {
     if (!photo) return;
-    
+
     setIsGenerating(true);
     try {
       toast.info("AI正在改造中，请稍候...");
@@ -226,7 +235,13 @@ export function BeautyTransformPage() {
       setResultStyleName(transformed.styleName);
       toast.success("形象改造完成！");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "生成失败");
+      const msg = error instanceof Error ? error.message : "生成失败";
+      if (msg.includes('AI服务') || msg.includes('配置')) {
+        toast.error("请先在AI配置页面添加图像生成服务的API密钥");
+        setHasAIConfig(false);
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -515,7 +530,19 @@ export function BeautyTransformPage() {
             </Card>
 
             {/* 操作按钮 */}
-            {!result ? (
+            {hasAIConfig === false ? (
+              <Card className="border-amber-200 bg-amber-50">
+                <CardContent className="p-4 text-center">
+                  <Settings className="w-10 h-10 mx-auto mb-2 text-amber-500" />
+                  <p className="text-sm font-medium text-amber-800 mb-1">AI服务未配置</p>
+                  <p className="text-xs text-amber-600 mb-3">请先在AI配置页面添加图像生成服务的API密钥</p>
+                  <Button size="sm" className="bg-amber-500 hover:bg-amber-600" onClick={() => navigate({ to: '/ai-config' })}>
+                    <Settings className="w-3 h-3 mr-1" />
+                    前往配置
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : !result ? (
               <Button size="lg" className="w-full rounded-xl shadow-soft gradient-fresh" onClick={handleGenerate} disabled={isGenerating}>
                 <Sparkles className="w-4 h-4 mr-2" />
                 {isGenerating ? "生成中..." : "开始改造"}

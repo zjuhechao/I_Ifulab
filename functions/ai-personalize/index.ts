@@ -6,9 +6,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// 平台API配置
-const PLATFORM_QWEN_API_KEY = Deno.env.get('MEOO_PROJECT_API_KEY') || '';
-const QWEN_BASE_URL = 'https://api.meoo.host/meoo-ai/compatible-mode/v1';
+// AI API调用基础URL（可由用户配置覆盖）
+const DEFAULT_BASE_URL = 'https://api.meoo.host/meoo-ai/compatible-mode/v1';
 
 interface UserProfile {
   skinType: string;
@@ -116,15 +115,16 @@ async function getMatchingProducts(
     .slice(0, limit);
 }
 
-// 生成产品推荐理由
+// 生成产品推荐理由（需要用户配置的API）
 async function generateProductReason(
   product: any,
   userProfile: UserProfile,
   report: SkinReport | null,
-  apiKey: string
+  apiKey: string,
+  baseUrl: string
 ): Promise<string> {
   if (!apiKey) {
-    return `适合${userProfile.skinType}肤质，${product.budget_level}价位优选`;
+    throw new Error('NO_AI_CONFIG');
   }
   
   try {
@@ -140,7 +140,7 @@ ${report ? `肤质问题：水润度${report.moisture_level}/10，出油${report
 
 请直接返回推荐理由，不要加标题。`;
 
-    const response = await fetch(`${QWEN_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -167,7 +167,8 @@ async function generateSkincareRoutine(
   supabase: any,
   userProfile: UserProfile,
   report: SkinReport | null,
-  apiKey: string
+  apiKey: string,
+  baseUrl: string
 ): Promise<any> {
   const steps = ['cleanser', 'toner', 'essence', 'moisturizer', 'sunscreen'];
   const stepNames: Record<string, string> = {
@@ -177,21 +178,21 @@ async function generateSkincareRoutine(
     moisturizer: '乳液/面霜',
     sunscreen: '防晒',
   };
-  
+
   const routine: any[] = [];
-  
+
   for (const step of steps) {
     const products = await getMatchingProducts(supabase, userProfile, step, 3);
-    
+
     if (products.length > 0) {
       // 为每个产品生成推荐理由
       const productsWithReasons = await Promise.all(
         products.map(async (p) => ({
           ...p,
-          aiReason: await generateProductReason(p, userProfile, report, apiKey),
+          aiReason: await generateProductReason(p, userProfile, report, apiKey, baseUrl),
         }))
       );
-      
+
       routine.push({
         step,
         stepName: stepNames[step],
@@ -199,23 +200,20 @@ async function generateSkincareRoutine(
       });
     }
   }
-  
+
   return routine;
 }
 
-// 生成方案总结
+// 生成方案总结（需要用户配置的API）
 async function generateRoutineSummary(
   routine: any[],
   userProfile: UserProfile,
   report: SkinReport | null,
-  apiKey: string
+  apiKey: string,
+  baseUrl: string
 ): Promise<{ title: string; description: string; tips: string[] }> {
   if (!apiKey) {
-    return {
-      title: `${userProfile.skinType}肤质专属方案`,
-      description: `根据您的${userProfile.skinType}肤质和${userProfile.budgetLevel}预算，为您精选了${routine.length}步护肤方案。`,
-      tips: ['坚持每日护肤', '注意防晒', '保持充足睡眠'],
-    };
+    throw new Error('NO_AI_CONFIG');
   }
   
   try {
@@ -232,7 +230,7 @@ ${report ? `肤质评分：${report.total_score}/100` : ''}
   "tips": ["护肤建议1", "护肤建议2", "护肤建议3"]
 }`;
 
-    const response = await fetch(`${QWEN_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -268,13 +266,14 @@ ${report ? `肤质评分：${report.total_score}/100` : ''}
   };
 }
 
-// 生成深度护理建议
+// 生成深度护理建议（需要用户配置的API）
 async function generateDeepCareAdvice(
   analysisResult: any,
-  apiKey: string
+  apiKey: string,
+  baseUrl: string
 ): Promise<{ projects: Array<{ name: string; type: 'beauty' | 'medical'; description: string; frequency: string; price: string; priority: 'high' | 'medium' | 'low' }>; summary: string }> {
   if (!apiKey) {
-    return getFallbackDeepCareAdvice(analysisResult);
+    throw new Error('NO_AI_CONFIG');
   }
 
   try {
@@ -314,7 +313,7 @@ async function generateDeepCareAdvice(
 3. 价格要合理
 4. 优先级根据问题严重程度设定`;
 
-    const response = await fetch(`${QWEN_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -380,22 +379,34 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { type, userProfile, report } = await req.json();
-    
+    const body = await req.json();
+    const { type, userProfile, report, userConfig } = body;
+
+    // 从用户配置中获取API密钥和Base URL
+    const apiKey = userConfig?.apiKey || '';
+    const baseUrl = userConfig?.baseUrl || DEFAULT_BASE_URL;
+
+    // 需要AI调用的操作类型
+    const aiRequiredTypes = ['generate_routine', 'get_step_products', 'product_recommendation', 'deep_care_advice'];
+    if (aiRequiredTypes.includes(type) && !apiKey) {
+      return new Response(
+        JSON.stringify({ error: '请先配置AI服务', code: 'NO_AI_CONFIG', message: '请在AI配置页面添加文本生成服务的API密钥后重试' }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
     const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
     const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
     const supabase = createClient(supabaseUrl, supabaseKey);
-    
-    const apiKey = PLATFORM_QWEN_API_KEY;
 
     let result;
-    
+
     switch (type) {
       case 'generate_routine':
         // 生成完整护肤方案
-        const routine = await generateSkincareRoutine(supabase, userProfile, report, apiKey);
-        const summary = await generateRoutineSummary(routine, userProfile, report, apiKey);
+        const routine = await generateSkincareRoutine(supabase, userProfile, report, apiKey, baseUrl);
+        const summary = await generateRoutineSummary(routine, userProfile, report, apiKey, baseUrl);
         result = {
           routine,
           summary,
@@ -403,24 +414,24 @@ Deno.serve(async (req) => {
           totalProducts: routine.reduce((sum: number, r: any) => sum + r.products.length, 0),
         };
         break;
-        
+
       case 'get_step_products':
         // 获取某一步骤的产品
-        const { step } = await req.json();
+        const { step } = body;
         const stepProducts = await getMatchingProducts(supabase, userProfile, step, 5);
         const productsWithReasons = await Promise.all(
           stepProducts.map(async (p) => ({
             ...p,
-            aiReason: await generateProductReason(p, userProfile, report, apiKey),
+            aiReason: await generateProductReason(p, userProfile, report, apiKey, baseUrl),
           }))
         );
         result = { products: productsWithReasons };
         break;
-        
+
       case 'product_recommendation':
         // 单个产品推荐（兼容旧接口）
-        const { product } = await req.json();
-        const reason = await generateProductReason(product, userProfile, report, apiKey);
+        const { product } = body;
+        const reason = await generateProductReason(product, userProfile, report, apiKey, baseUrl);
         result = {
           reasons: [
             { text: reason, type: 'ai' },
@@ -432,8 +443,8 @@ Deno.serve(async (req) => {
 
       case 'deep_care_advice':
         // 深度护理建议
-        const { analysisResult } = await req.json();
-        const deepCareAdvice = await generateDeepCareAdvice(analysisResult, apiKey);
+        const { analysisResult } = body;
+        const deepCareAdvice = await generateDeepCareAdvice(analysisResult, apiKey, baseUrl);
         result = deepCareAdvice;
         break;
 
@@ -448,10 +459,17 @@ Deno.serve(async (req) => {
       JSON.stringify({ success: true, data: result }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
-    
+
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Internal Server Error';
     console.error('Error:', err);
+    // NO_AI_CONFIG error thrown from helper functions
+    if (err instanceof Error && err.message === 'NO_AI_CONFIG') {
+      return new Response(
+        JSON.stringify({ error: '请先配置AI服务', code: 'NO_AI_CONFIG', message: '请在AI配置页面添加文本生成服务的API密钥后重试' }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
     return new Response(
       JSON.stringify({ error: message, code: 'INTERNAL_ERROR' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

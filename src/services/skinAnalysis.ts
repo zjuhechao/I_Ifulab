@@ -204,7 +204,6 @@ export interface AnalysisError {
   error: string;
   code: string;
   message?: string;
-  suggestOfficial?: boolean;
   configError?: {
     provider: string;
     model: string;
@@ -217,7 +216,7 @@ export async function analyzeSkin(
   userAge: number,
   userGender: string,
   questionnaireData?: Record<string, number>,
-  options?: { useOfficialAI?: boolean; userId?: string }
+  options?: { userId?: string }
 ): Promise<SkinAnalysisResult> {
   const response = await fetch(`${getSupabaseUrl()}/functions/v1/skin-analysis`, {
     method: 'POST',
@@ -228,20 +227,19 @@ export async function analyzeSkin(
       userGender,
       questionnaireData,
       userId: options?.userId,
-      useOfficialAI: options?.useOfficialAI
     }),
   });
 
   if (!response.ok) {
     const error = await response.json() as AnalysisError;
 
-    // 如果是自定义AI配置失败，抛出特殊错误供上层处理
-    if (error.code === 'CUSTOM_AI_FAILED' && error.suggestOfficial) {
+    // AI配置异常或未配置
+    if (error.code === 'CUSTOM_AI_FAILED' || error.code === 'NO_AI_CONFIG') {
       const customError = new Error(error.message || error.error) as Error & {
         code: string;
         originalError: AnalysisError
       };
-      customError.code = 'CUSTOM_AI_FAILED';
+      customError.code = error.code;
       customError.originalError = error;
       throw customError;
     }

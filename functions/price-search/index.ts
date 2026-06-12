@@ -12,16 +12,15 @@ interface PriceResult {
   brand: string;
   price: number;
   originalPrice?: number;
-  platform: 'taobao' | 'jd' | 'tmall' | 'database' | 'ai_recommend';
+  platform: 'taobao' | 'jd' | 'tmall' | 'database';
   url: string;
   shop: string;
   sales?: string;
   rating?: number;
   image?: string;
   tags: string[];
-  source: 'database' | 'external_api' | 'ai_recommend';
+  source: 'database' | 'external_api';
   lastUpdated: string;
-  aiReason?: string;
 }
 
 // 生成平台搜索URL
@@ -36,80 +35,6 @@ function generatePlatformUrl(platform: string, productName: string, brand: strin
       return `https://search.jd.com/Search?keyword=${encoded}`;
     default:
       return `https://www.google.com/search?q=${encoded}`;
-  }
-}
-
-// 调用AI获取产品价格和推荐
-async function getAIProductRecommendation(query: string, apiKey: string): Promise<PriceResult[]> {
-  try {
-    const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'qwen-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: `你是一个护肤产品专家。用户搜索产品时，请提供该产品的参考价格、品牌、购买建议等信息。
-请返回JSON格式：{
-  "products": [
-    {
-      "name": "产品名称",
-      "brand": "品牌",
-      "category": "类别(精华/面霜/洁面等)",
-      "price": 参考价格(数字),
-      "rating": 评分(4.0-5.0),
-      "reason": "推荐理由",
-      "tags": ["标签1", "标签2"]
-    }
-  ]
-}`
-          },
-          {
-            role: 'user',
-            content: `请帮我查询"${query}"的相关产品信息，包括参考价格、品牌、购买建议。`
-          }
-        ],
-        response_format: { type: 'json_object' },
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`AI API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    
-    if (!content) {
-      throw new Error('No content from AI');
-    }
-
-    const parsed = JSON.parse(content);
-    const products = parsed.products || [];
-
-    return products.map((p: any, index: number) => ({
-      id: `ai-${Date.now()}-${index}`,
-      name: p.name || query,
-      brand: p.brand || '未知品牌',
-      price: p.price || 199,
-      originalPrice: p.price ? Math.round(p.price * 1.2) : 239,
-      platform: 'ai_recommend',
-      url: generatePlatformUrl('tmall', p.name || query, p.brand || ''),
-      shop: `${p.brand || '品牌'}天猫旗舰店`,
-      sales: 'AI推荐',
-      rating: p.rating || 4.5,
-      tags: p.tags || ['AI推荐', p.category || '护肤品'],
-      source: 'ai_recommend',
-      lastUpdated: new Date().toISOString(),
-      aiReason: p.reason || '根据您的搜索推荐',
-    }));
-  } catch (error) {
-    console.error('AI recommendation error:', error);
-    return [];
   }
 }
 
@@ -177,7 +102,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { query, useAI = true } = await req.json();
+    const { query } = await req.json();
     
     if (!query || typeof query !== 'string') {
       return new Response(
@@ -188,13 +113,11 @@ Deno.serve(async (req) => {
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
     const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
-    const aiApiKey = Deno.env.get('DASHSCOPE_API_KEY') || '';
     const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     let allResults: PriceResult[] = [];
     let dataSources: string[] = [];
-    let aiUsed = false;
 
     // 1. 从数据库获取
     const dbResults = await getProductsFromDB(supabase, query);
@@ -203,17 +126,7 @@ Deno.serve(async (req) => {
       dataSources.push('database');
     }
 
-    // 2. 如果数据库没有结果，调用AI推荐
-    if (allResults.length === 0 && useAI && aiApiKey) {
-      const aiResults = await getAIProductRecommendation(query, aiApiKey);
-      if (aiResults.length > 0) {
-        allResults = [...allResults, ...aiResults];
-        dataSources.push('ai_recommend');
-        aiUsed = true;
-      }
-    }
-
-    // 3. 如果仍然没有结果，提供平台搜索链接
+    // 2. 如果数据库没有结果，提供平台搜索链接
     if (allResults.length === 0) {
       const searchResults = getPlatformSearchResults(query);
       allResults = [...allResults, ...searchResults];
@@ -246,11 +159,8 @@ Deno.serve(async (req) => {
           lowestPrice: allResults.length > 0 && allResults[0].price > 0 ? allResults[0].price : null,
           highestPrice: allResults.length > 0 ? allResults[allResults.length - 1].price : null,
           dataSources,
-          aiUsed,
           timestamp: new Date().toISOString(),
-          note: aiUsed ? 'AI根据您的搜索提供了参考价格' : 
-                allResults.length === 0 ? '未找到匹配产品，请尝试其他关键词' : 
-                undefined,
+          note: allResults.length === 0 ? '未找到匹配产品，请尝试其他关键词' : undefined,
         }
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

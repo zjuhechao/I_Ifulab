@@ -1,6 +1,3 @@
-const MEOO_AI_BASE_URL = 'https://api.meoo.host';
-const MEOO_PROJECT_SERVICE_AK = Deno.env.get('MEOO_PROJECT_API_KEY') || '';
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -46,9 +43,17 @@ async function callAIAnalysis(
   userGender: string
 ): Promise<{ success: boolean; data?: any; error?: string; errorType?: 'config_invalid' | 'api_error' | 'parse_error' }> {
   const provider = config.provider || 'meoo';
-  const baseUrl = config.base_url || MEOO_AI_BASE_URL;
-  const apiKey = config.api_key || MEOO_PROJECT_SERVICE_AK;
+  const baseUrl = config.base_url;
+  const apiKey = config.api_key;
   const model = config.model || 'qwen3-vl-plus';
+
+  if (!apiKey || !baseUrl) {
+    return {
+      success: false,
+      error: '请先配置AI服务',
+      errorType: 'config_invalid'
+    };
+  }
   
   const prompt = `请作为专业皮肤科医生，详细分析这张面部照片，给出专业的肤质分析报告。
 
@@ -224,7 +229,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { imageUrl, userAge, userGender, userId = 'guest', useOfficialAI = false } = await req.json();
+    const { imageUrl, userAge, userGender, userId = 'guest' } = await req.json();
 
     if (!imageUrl) {
       return new Response(JSON.stringify({ error: '缺少图片URL' }), {
@@ -239,84 +244,53 @@ Deno.serve(async (req) => {
     const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    let analysisResult;
-    let usedConfig: any = null;
-    let configSource: string = 'official';
+    // 获取用户的AI配置
+    const configData = await getUserAIConfig(supabase, userId, 'vision');
 
-    // 如果用户明确要求使用官方AI，跳过配置检查
-    if (!useOfficialAI) {
-      // 获取用户的AI配置
-      const configData = await getUserAIConfig(supabase, userId, 'vision');
-      
-      if (configData) {
-        usedConfig = configData.config;
-        configSource = configData.source;
-        
-        // 尝试使用用户配置的AI
-        const result = await callAIAnalysis(usedConfig, imageUrl, userAge, userGender);
-        
-        if (result.success) {
-          analysisResult = result.data;
-        } else {
-          // 配置存在但调用失败
-          let errorMessage = '';
-          let shouldSuggestOfficial = false;
-          
-          if (result.errorType === 'config_invalid') {
-            errorMessage = '您配置的AI服务认证失败，请检查API密钥是否正确';
-            shouldSuggestOfficial = true;
-          } else if (result.errorType === 'api_error') {
-            errorMessage = `您配置的AI服务调用失败: ${result.error}`;
-            shouldSuggestOfficial = true;
-          } else if (result.errorType === 'parse_error') {
-            errorMessage = 'AI返回的数据格式异常';
-            shouldSuggestOfficial = true;
-          }
-          
-          if (shouldSuggestOfficial) {
-            return new Response(JSON.stringify({
-              error: errorMessage,
-              code: 'CUSTOM_AI_FAILED',
-              message: '您的AI配置存在问题，是否使用官方AI服务继续分析？',
-              suggestOfficial: true,
-              configError: {
-                provider: usedConfig.provider,
-                model: usedConfig.model,
-                error: result.error,
-              }
-            }), {
-              status: 422,
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            });
-          }
+    // 没有配置AI服务
+    if (!configData) {
+      return new Response(JSON.stringify({
+        error: '请先配置AI服务',
+        code: 'NO_AI_CONFIG',
+        message: '请在AI配置页面添加视觉理解服务的API密钥后重试',
+      }), {
+        status: 422,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const usedConfig = configData.config;
+    const configSource = configData.source;
+
+    // 使用用户配置的AI进行分析
+    const result = await callAIAnalysis(usedConfig, imageUrl, userAge, userGender);
+
+    if (!result.success) {
+      let errorMessage = '';
+      if (result.errorType === 'config_invalid') {
+        errorMessage = '您配置的AI服务认证失败，请检查API密钥是否正确';
+      } else if (result.errorType === 'api_error') {
+        errorMessage = `AI服务调用失败: ${result.error}`;
+      } else if (result.errorType === 'parse_error') {
+        errorMessage = 'AI返回的数据格式异常';
+      }
+
+      return new Response(JSON.stringify({
+        error: errorMessage,
+        code: 'CUSTOM_AI_FAILED',
+        message: '您的AI配置存在问题，请检查后在AI配置页面更新',
+        configError: {
+          provider: usedConfig.provider,
+          model: usedConfig.model,
+          error: result.error,
         }
-      }
+      }), {
+        status: 422,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    // 如果没有使用自定义配置或配置调用失败，使用官方AI
-    if (!analysisResult) {
-      const officialConfig = {
-        provider: 'meoo',
-        base_url: MEOO_AI_BASE_URL,
-        api_key: MEOO_PROJECT_SERVICE_AK,
-        model: 'qwen3-vl-plus',
-      };
-      
-      const result = await callAIAnalysis(officialConfig, imageUrl, userAge, userGender);
-      
-      if (!result.success) {
-        return new Response(JSON.stringify({
-          error: result.error || 'AI分析失败',
-          code: 'OFFICIAL_AI_FAILED',
-        }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-      
-      analysisResult = result.data;
-      configSource = 'official';
-    }
+    const analysisResult = result.data;
 
     // 直接使用AI返回的肌龄数据
     const skinAge = analysisResult.skin_age || userAge;

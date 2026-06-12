@@ -1,9 +1,6 @@
 // 形象改造 - AI美妆编辑 Edge Function
 // 支持多API配置，可从数据库读取用户配置的AI服务
 
-const MEOO_AI_BASE_URL = 'https://api.meoo.host';
-const MEOO_PROJECT_SERVICE_AK = Deno.env.get('MEOO_PROJECT_API_KEY') || '';
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -148,9 +145,13 @@ async function callAIService(
   prompt: string
 ): Promise<string> {
   const provider = config.provider || 'meoo';
-  const baseUrl = config.base_url || MEOO_AI_BASE_URL;
-  const apiKey = config.api_key || MEOO_PROJECT_SERVICE_AK;
+  const baseUrl = config.base_url;
+  const apiKey = config.api_key;
   const model = config.model || 'wan2.7-image';
+
+  if (!apiKey || !baseUrl) {
+    throw new Error('NO_AI_CONFIG');
+  }
   
   // 构建请求体
   const requestBody: any = {
@@ -267,15 +268,16 @@ Deno.serve(async (req) => {
       aiConfig = await getUserAIConfig(supabase, userId, 'image_gen');
     }
     
-    // 如果没有配置，使用Meoo默认
+    // 如果没有配置，返回错误提示
     if (!aiConfig) {
-      aiConfig = {
-        provider: 'meoo',
-        base_url: MEOO_AI_BASE_URL,
-        api_key: MEOO_PROJECT_SERVICE_AK,
-        model: 'wan2.7-image',
-        config: { size: '2K', watermark: false },
-      };
+      return new Response(JSON.stringify({
+        error: '请先配置AI服务',
+        code: 'NO_AI_CONFIG',
+        message: '请在AI配置页面添加图像生成服务的API密钥后重试',
+      }), {
+        status: 422,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     // 获取配置
@@ -337,6 +339,16 @@ ${styleConfig.makeup}
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Internal Server Error';
+    if (err instanceof Error && err.message === 'NO_AI_CONFIG') {
+      return new Response(JSON.stringify({
+        error: '请先配置AI服务',
+        code: 'NO_AI_CONFIG',
+        message: '请在AI配置页面添加图像生成服务的API密钥后重试',
+      }), {
+        status: 422,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
     return new Response(JSON.stringify({ error: message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

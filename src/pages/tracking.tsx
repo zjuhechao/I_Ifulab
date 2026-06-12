@@ -11,121 +11,8 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { useNavigate } from "@tanstack/react-router";
 import { useAppStore } from "@/store/app-store";
 import { getSkinReports } from "@/services/skinAnalysis";
-import { getTextGenAIConfig } from "@/services/aiConfig";
 import type { SkinReport } from "@/types";
 import { toast } from "sonner";
-
-// 调用AI服务生成个性化内容
-async function callAIPersonalize(
-  type: 'monthly_summary' | 'peer_comparison',
-  data: {
-    reports: SkinReport[];
-    userAge: number;
-    skinType: string;
-    userId?: string;
-  }
-): Promise<{ success: boolean; content?: string; percentile?: number; comparisonText?: string; error?: string }> {
-  try {
-    const { reports, userAge, skinType, userId } = data;
-    const userConfig = await getTextGenAIConfig();
-
-    // 构建提示词
-    let prompt = '';
-    if (type === 'monthly_summary') {
-      const latestReport = reports[0];
-      const avgScore = Math.round(reports.reduce((a, b) => a + b.total_score, 0) / reports.length);
-      prompt = `请作为专业皮肤科医生，根据以下用户的肤质检测数据，生成一段个性化的月度护肤总结（200字以内）：
-
-用户年龄：${userAge}岁
-肤质类型：${skinType}
-本月检测次数：${reports.length}次
-平均评分：${avgScore}分
-最新评分：${latestReport.total_score}分
-肌龄：${latestReport.skin_age}岁
-
-各项指标（最新）：
-- 水润度：${latestReport.moisture_level}/10
-- 出油度：${latestReport.oil_level}/10
-- 敏感度：${latestReport.sensitivity_level}/10
-- 痘痘：${latestReport.acne_level}/10
-- 色斑：${latestReport.pigmentation_level}/10
-- 皱纹：${latestReport.wrinkle_level}/10
-- 毛孔：${latestReport.pore_level}/10
-- 黑眼圈：${latestReport.dark_circle_level}/10
-- 光滑度：${latestReport.smoothness_level}/10
-
-请生成一段专业、温暖、个性化的月度总结，包含：
-1. 本月肌肤状态整体评价
-2. 需要关注的问题
-3. 下月护肤建议
-
-直接返回总结文字，不要包含JSON格式或其他标记。`;
-    } else {
-      const latestReport = reports[0];
-      prompt = `请作为专业皮肤科医生，根据以下用户的肤质检测数据，生成同龄对比分析：
-
-用户年龄：${userAge}岁
-肤质类型：${skinType}
-综合评分：${latestReport.total_score}分
-肌龄：${latestReport.skin_age}岁
-
-各项指标：
-- 水润度：${latestReport.moisture_level}/10
-- 出油度：${latestReport.oil_level}/10
-- 敏感度：${latestReport.sensitivity_level}/10
-- 痘痘：${latestReport.acne_level}/10
-- 色斑：${latestReport.pigmentation_level}/10
-- 皱纹：${latestReport.wrinkle_level}/10
-- 毛孔：${latestReport.pore_level}/10
-- 黑眼圈：${latestReport.dark_circle_level}/10
-- 光滑度：${latestReport.smoothness_level}/10
-
-请返回JSON格式：
-{
-  "percentile": 1-99之间的整数，表示超越同龄人的百分比,
-  "comparisonText": "一段温暖鼓励的对比描述，如'太棒了！你的肌肤状态超越了85%的同龄人...'"
-}
-
-percentile请根据综合评分和各项指标合理估算，高分高percentile，低分低percentile。`;
-    }
-
-    // 调用Edge Function
-    const response = await fetch('/functions/ai-personalize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type,
-        prompt,
-        userId: userId || 'guest',
-        userConfig,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error('AI服务调用失败');
-    }
-
-    const result = await response.json();
-
-    if (type === 'monthly_summary') {
-      return { success: true, content: result.content || result.summary || '本月肌肤状态良好，建议继续保持当前护肤习惯。' };
-    } else {
-      return {
-        success: true,
-        percentile: result.percentile || 50,
-        comparisonText: result.comparisonText || `您的肌肤状态处于同龄人的中等水平，建议继续保持护肤习惯。`
-      };
-    }
-  } catch (error) {
-    console.error('AI个性化服务调用失败:', error);
-    // 返回默认值
-    if (type === 'monthly_summary') {
-      return { success: false, content: '本月肌肤状态良好，建议继续保持当前护肤习惯，定期检测追踪变化。', error: String(error) };
-    } else {
-      return { success: false, percentile: 50, comparisonText: '您的肌肤状态处于同龄人的中等水平，建议继续保持护肤习惯。', error: String(error) };
-    }
-  }
-}
 
 const skinTypeLabels: Record<string, string> = {
   dry: "干性", oily: "油性", combination: "混合性",
@@ -140,25 +27,41 @@ const indicatorLabels: Record<string, string> = {
 
 const COLORS = ["#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#f97316", "#84cc16", "#ec4899", "#6366f1"];
 
-// AI生成月度总结 - 调用AI服务
-async function generateMonthlySummary(reports: SkinReport[], userAge: number, skinType: string, userId?: string): Promise<string> {
+// 生成基于数据的月度总结（不使用AI）
+function getTemplateMonthlySummary(reports: SkinReport[]): string {
   if (reports.length === 0) return "暂无检测数据，建议开始定期记录肌肤状态。";
 
-  const result = await callAIPersonalize('monthly_summary', { reports, userAge, skinType, userId });
-  return result.content || "本月肌肤状态良好，建议继续保持当前护肤习惯。";
-}
+  const latestReport = reports[0];
+  const avgScore = Math.round(reports.reduce((a, b) => a + b.total_score, 0) / reports.length);
+  const skinType = skinTypeLabels[latestReport.skin_type] || latestReport.skin_type;
+  const problems: string[] = [];
+  if ((latestReport.moisture_level || 0) < 5) problems.push('水分不足');
+  if ((latestReport.oil_level || 0) > 6) problems.push('油脂分泌偏多');
+  if ((latestReport.sensitivity_level || 0) > 5) problems.push('肌肤敏感');
+  if ((latestReport.acne_level || 0) > 4) problems.push('痘痘问题');
+  if ((latestReport.pigmentation_level || 0) > 4) problems.push('色斑沉着');
+  if ((latestReport.wrinkle_level || 0) > 4) problems.push('细纹出现');
 
-// AI生成同龄人对比数据 - 调用AI服务
-async function generateAIComparison(reports: SkinReport[], userAge: number, skinType: string, userId?: string): Promise<{ percentile: number; comparisonText: string }> {
-  if (reports.length === 0) {
-    return { percentile: 50, comparisonText: "暂无数据，开始检测获取个性化对比。" };
+  const trend = reports.length >= 2
+    ? (latestReport.total_score > reports[1].total_score ? '提升' : latestReport.total_score < reports[1].total_score ? '下降' : '稳定')
+    : '首次检测';
+
+  let summary = `您的肤质类型为${skinType}，本月综合评分${latestReport.total_score}分`;
+  if (reports.length > 1) {
+    summary += `（较上次${trend}），月均评分${avgScore}分。`;
+  } else {
+    summary += `。`;
   }
 
-  const result = await callAIPersonalize('peer_comparison', { reports, userAge, skinType, userId });
-  return {
-    percentile: result.percentile || 50,
-    comparisonText: result.comparisonText || "您的肌肤状态处于同龄人的中等水平。"
-  };
+  if (problems.length > 0) {
+    summary += `建议重点关注：${problems.join('、')}。`;
+  } else {
+    summary += `各项指标表现良好，请继续保持当前护肤习惯。`;
+  }
+
+  summary += `肌龄${latestReport.skin_age}岁，${latestReport.skin_age_delta < 0 ? `比实际年龄年轻${Math.abs(latestReport.skin_age_delta)}岁。` : '与实际年龄接近。'}`;
+
+  return summary;
 }
 
 export function TrackingPage() {
@@ -195,18 +98,10 @@ export function TrackingPage() {
   const latestReport = reports[0];
   const previousReport = reports[1];
 
-  // AI生成的月度总结
-  const [monthlySummary, setMonthlySummary] = useState<string>("加载中...");
-  const [aiComparison, setAiComparison] = useState<{ percentile: number; comparisonText: string } | null>(null);
-
-  useEffect(() => {
-    if (reports.length > 0) {
-      // 调用AI生成月度总结
-      generateMonthlySummary(reports, skinProfile.age, skinProfile.skinType, user?.id).then(setMonthlySummary);
-      // 调用AI生成同龄人对比
-      generateAIComparison(reports, skinProfile.age, skinProfile.skinType, user?.id).then(setAiComparison);
-    }
-  }, [reports, skinProfile, user?.id]);
+  // 使用模板生成的月度总结
+  const monthlySummary = reports.length > 0
+    ? getTemplateMonthlySummary(reports)
+    : "暂无检测数据，建议开始定期记录肌肤状态。";
 
   const radarData = useMemo(() => {
     if (!latestReport) return [];
@@ -330,12 +225,10 @@ export function TrackingPage() {
         ctx.font = '14px sans-serif';
         ctx.fillText(`综合评分 | 肌龄 ${latestReport.skin_age}岁`, canvas.width / 2, 180);
         
-        // 绘制AI对比
-        if (aiComparison) {
-          ctx.fillStyle = '#8b5cf6';
-          ctx.font = 'bold 16px sans-serif';
-          ctx.fillText(`超越 ${aiComparison.percentile}% 同龄人`, canvas.width / 2, 220);
-        }
+        // 绘制评分等级
+        ctx.fillStyle = '#8b5cf6';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillText(`综合评分 ${latestReport.total_score} 分`, canvas.width / 2, 220);
         
         // 绘制日期
         ctx.fillStyle = '#94a3b8';
@@ -424,36 +317,36 @@ export function TrackingPage() {
                       </div>
                     </div>
                     
-                    {/* AI同龄人对比 */}
-                    {aiComparison && (
+                    {/* 同龄人对比 */}
+                    {latestReport && (
                       <div className="mt-4 p-3 bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl border border-violet-100">
                         <div className="flex items-center gap-2 mb-2">
                           <Trophy className="w-4 h-4 text-violet-500" />
-                          <span className="text-sm font-medium text-violet-700">AI同龄人对比</span>
+                          <span className="text-sm font-medium text-violet-700">同龄人对比</span>
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="flex-1">
                             <div className="h-2 bg-violet-100 rounded-full overflow-hidden">
-                              <div 
+                              <div
                                 className="h-full bg-gradient-to-r from-violet-400 to-purple-500 rounded-full transition-all duration-1000"
-                                style={{ width: `${aiComparison.percentile}%` }}
+                                style={{ width: `${latestReport.total_score}%` }}
                               />
                             </div>
                           </div>
-                          <span className="text-sm font-bold text-violet-600">{aiComparison.percentile}%</span>
+                          <span className="text-sm font-bold text-violet-600">{latestReport.total_score}分</span>
                         </div>
-                        <p className="text-xs text-violet-600 mt-2">{aiComparison.comparisonText}</p>
+                        <p className="text-xs text-violet-600 mt-2">{latestReport.analysis_summary || '保持良好护肤习惯，定期追踪肌肤变化。'}</p>
                       </div>
                     )}
                   </CardContent>
                 </Card>
 
-                {/* 月度AI总结 */}
+                {/* 月度总结 */}
                 <Card className="shadow-soft border-0 bg-gradient-to-r from-emerald-50 to-teal-50 border-l-4 border-l-emerald-400">
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2 mb-2">
                       <Sparkles className="w-4 h-4 text-emerald-500" />
-                      <h3 className="font-medium text-emerald-800">月度AI总结</h3>
+                      <h3 className="font-medium text-emerald-800">月度总结</h3>
                     </div>
                     <p className="text-sm text-emerald-700 leading-relaxed">{monthlySummary}</p>
                   </CardContent>
